@@ -214,7 +214,7 @@ def FreshBlock (h : Heap) (base : Int) (n : Nat) : Prop :=
 
 inductive Frame where
   | ret (is : Instrs)
-  | handler (handler : Instrs) (k : Instrs)
+  | handler (handler : Instrs) (k : Instrs) (s : Stack)
 
 inductive Step : IDefns →
                  Instrs → List Frame → Stack → Heap →
@@ -249,11 +249,11 @@ inductive Step : IDefns →
   Step ds (.write o :: is) cs (i :: j :: s) h is cs (i :: s) (Heap.ext h (i + o) j)
 | trycatchr {ds is body handle cs s h} :
   Step ds (.trycatch body handle :: is) cs s h
-    body (.handler handle is :: cs) s h
-| ret_handler {ds handle k cs s h} :
-  Step ds [] (.handler handle k :: cs) s h k cs s h
-| abort_handler {ds is' handle k cs s h} :
-  Step ds (.abort :: is') (.handler handle k :: cs) s h handle (.ret k :: cs) s h
+    body (.handler handle is s :: cs) s h
+| ret_handler {ds handle k og_stack cs s h} :
+  Step ds [] (.handler handle k og_stack :: cs) s h k cs s h
+| abort_handler {ds is' handle k og_stack cs h i} :
+    Step ds (.abort :: is') (.handler handle k og_stack :: cs) (i :: _) h handle (.ret k :: cs) (i :: og_stack) h
 | abort_retr {ds is' k cs s h} :
   Step ds (.abort :: is') (.ret k :: cs) s h (.abort :: is') cs s h
 | retr {ds is cs s h} :
@@ -381,26 +381,103 @@ def AnsRep : Ans → Int → Heap → Prop
 -- * exceptions skip .ret frames;
 -- * exceptions jump to the nearest .handler;
 -- * if there is no handler, they leave the machine at (.abort :: is).
+
+-- the thing from piazza
+inductive ExnContinuesWith :
+  Instrs → List Frame →
+  Int → Instrs → List Frame → Stack → Prop where
+  | exn_nil {is i is'} (s : Stack) :
+    ExnContinuesWith is [] i (.abort :: is') [] s
+  | exn_ret {is k cs i is' cs' og_stack} :
+    ExnContinuesWith is cs i is' cs' og_stack →
+    ExnContinuesWith is (.ret k :: cs) i is' cs' og_stack
+  | exn_handler {is handle k cs i og_stack} :
+    ExnContinuesWith is (.handler handle k og_stack :: cs) i
+      handle (.ret k :: cs) (i :: og_stack)
+
 inductive ContinuesWith :
   Ans → Instrs → List Frame → Stack →
   Int → Instrs → List Frame → Stack → Prop where
-| val {v is cs s i} :
-  ContinuesWith (.val v) is cs s i
-    is cs (i :: s)
-| exn_nil {v is s i} :
-  ContinuesWith (.exn v) is [] s i
-    (.abort :: is) [] (i :: s)
-| exn_ret {v is k cs s i is' cs' s'} :
-  ContinuesWith (.exn v) is cs s i is' cs' s' →
-  ContinuesWith (.exn v) is (.ret k :: cs) s i is' cs' s'
-| exn_handler {v is handle k cs s i} :
-  ContinuesWith (.exn v) is (.handler handle k :: cs) s i
-    handle (.ret k :: cs) (i :: s)
+  | val {v is cs s i} :
+    ContinuesWith (.val v) is cs s i
+      is cs (i :: s)
+  | exn {v is cs s i is' cs' og_stack} :
+    ExnContinuesWith is cs i is' cs' og_stack →
+    ContinuesWith (.exn v) is cs s i is' cs' og_stack
 
 def HeapExtends (h h' : Heap) : Prop :=
   ∀ a v,
   Heap.lookup h a = some v ->
   Heap.lookup h' a = some v
+
+-- lemma about heap stability
+theorem heap_stab_lemma {v i h h'} :
+  Represents v i h →
+  HeapExtends h h' →
+  Represents v i h' := by
+  intro repr ext
+  induction repr with
+  | int =>
+    apply Represents.int
+  | bool =>
+    apply Represents.bool
+  | pair rl rr lookl lookr extl extr =>
+    apply Represents.pair (extl ext) (extr ext)
+    · apply ext
+      exact lookl
+    · apply ext
+      exact lookr
+
+-- lemma about state stability across env/stack and heap
+theorem state_stability_lemma {s c r h h'} :
+  Related s c r h →
+  HeapExtends h h' →
+  Related s c r h' := by
+  intro rel ext
+  induction rel with
+  | mt =>
+    apply Related.mt
+  | push rel_ih ih =>
+    apply Related.push
+    apply ih
+    assumption
+  | bind rel_ih repr_ih ih =>
+    apply Related.bind
+    · apply ih
+      assumption
+    · apply heap_stab_lemma repr_ih
+      assumption
+
+-- this lemma states the rest of the instructions don't
+-- matter if we are propagating an exception since control
+-- flow is yielded to the exception
+theorem exn_lemma
+  {v is1 is2 cs s i is' cs' s'} :
+  ContinuesWith (.exn v) is1 cs s i is' cs' s' →
+  ContinuesWith (.exn v) is2 cs s i is' cs' s' := by
+  intro h
+  cases h with
+  | exn h' =>
+    apply ContinuesWith.exn
+    induction h' with
+    | exn_nil s =>
+      apply ExnContinuesWith.exn_nil
+    | exn_ret ih =>
+      apply ExnContinuesWith.exn_ret
+      assumption
+    | exn_handler =>
+      apply ExnContinuesWith.exn_handler
+
+-- transitivitiy between sequences of steps
+theorem Steps.trans_steps {ds is1 cs1 s1 h1 is2 cs2 s2 h2 is3 cs3 s3 h3} :
+  Steps ds is1 cs1 s1 h1 is2 cs2 s2 h2 →
+  Steps ds is2 cs2 s2 h2 is3 cs3 s3 h3 →
+  Steps ds is1 cs1 s1 h1 is3 cs3 s3 h3 := by
+  intro h12 h23
+  induction h23 with
+  | refl => assumption
+  | trans _ step ih =>
+      apply Steps.trans (ih h12) step
 
 theorem compiler_correct_general
   {ds c r e a is cs s h} :
@@ -410,4 +487,231 @@ theorem compiler_correct_general
     Steps (compile_defns ds) (compile ds c e ++ is) cs s h is' cs' s' h' ∧
     ContinuesWith a is cs s i is' cs' s' ∧
     AnsRep a i h' ∧
-    HeapExtends h h' := by sorry
+    HeapExtends h h' := by
+  intros rel eval
+  induction eval generalizing is s c h cs with
+  -- | intr x =>
+  --   exists x, h, is, cs, x :: s
+  --   -- steps part of conjunction
+  --   constructor
+  --   · apply Steps.trans Steps.refl Step.pushr
+  --   -- continues part of conjunction
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   -- repr part of conjunction
+  --   constructor
+  --   · apply Represents.int
+  --   -- heap part of conjunction
+  --   · intros _ _ h_lookup
+  --     assumption
+  -- | boolr x =>
+  --   -- same idea as above but x witness is bounded
+  --   exists (if x then 1 else 0), h, is, cs, (if x then 1 else 0) :: s
+  --   constructor
+  --   · apply Steps.trans Steps.refl Step.pushr
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   constructor
+  --   · apply Represents.bool
+  --   · intro _ _ h_lookup
+  --     assumption
+  -- | succr e ih =>
+  --   -- wow learning this tactic would have made earlier proofs a lot more concise
+  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
+  --   simp [compile, List.append_assoc]
+  --   cases cont
+  --   exists (x + 1), h', is, cs, (x + 1) :: s
+  --   constructor
+  --   · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   constructor
+  --   · cases repr
+  --     apply Represents.int
+  --   assumption
+  -- | predr e ih =>
+  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
+  --   simp [compile, List.append_assoc]
+  --   cases cont
+  --   exists (x - 1), h', is, cs, (x - 1) :: s
+  --   constructor
+  --   · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   constructor
+  --   · cases repr
+  --     apply Represents.int
+  --   assumption
+  -- | succ_propr e ih =>
+  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
+  --   exists x, h', is', cs', s'
+  --   simp [compile, List.append_assoc]
+  --   constructor
+  --   · assumption
+  --   constructor
+  --   · apply exn_lemma
+  --     assumption
+  --   constructor
+  --   assumption
+  --   assumption
+  -- | pred_propr e ih =>
+  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
+  --   exists x, h', is', cs', s'
+  --   simp [compile, List.append_assoc]
+  --   constructor
+  --   · assumption
+  --   constructor
+  --   · apply exn_lemma
+  --     assumption
+  --   constructor
+  --   assumption
+  --   assumption
+  -- | plusr evl evr ihl ihr =>
+  --   rename_i r el il er ir
+  --   -- draw from the first inductive hypothesis
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+  --   cases contl
+  --   -- show the heap and env are stable through compiling the first expr?
+  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+  --   -- now that we have a new relation that represents the state after compiling
+  --   -- we can go ahead and use the second hypothesis
+  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+  --     ihr (is := Instr.op Op.plus :: is) rel_r
+  --   cases contr
+  --   -- show the conjunction holds
+  --   exists (xl + xr), hr', is, cs, (xl + xr) :: s
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     apply Steps.trans_steps stepsl
+  --     apply Steps.trans_steps stepsr
+  --     apply Steps.trans Steps.refl
+  --     apply Step.opr OpEval.plus
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   constructor
+  --   · cases reprl
+  --     cases reprr
+  --     apply Represents.int
+  --   intros _ _ lookup
+  --   apply extnr
+  --   apply extnl
+  --   assumption
+  -- | timesr evl evr ihl ihr =>
+  --   rename_i r el il er ir
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+  --   cases contl
+
+  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+
+  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+  --     ihr (is := Instr.op Op.times :: is) rel_r
+  --   cases contr
+
+  --   exists (xl * xr), hr', is, cs, (xl * xr) :: s
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     apply Steps.trans_steps stepsl
+  --     apply Steps.trans_steps stepsr
+  --     apply Steps.trans Steps.refl
+  --     apply Step.opr OpEval.mult
+  --   constructor
+  --   · apply ContinuesWith.val
+  --   constructor
+  --   · cases reprl
+  --     cases reprr
+  --     apply Represents.int
+  --   intros _ _ lookup
+  --   apply extnr
+  --   apply extnl
+  --   assumption
+  -- compiling the left expr gives us an error
+  -- | plus_proplr evl ihl =>
+  --   rename_i _ _ _ er
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+  --   exists xl, hl', isl', csl', sl'
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     assumption
+  --   constructor
+  --   · apply exn_lemma
+  --     assumption
+  --   constructor
+  --   assumption
+  --   assumption
+  -- | plus_proprr evl evr ihl ihr =>
+  --   rename_i r _ er _ _
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+  --   cases contl
+
+  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+
+  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+  --     ihr (is := Instr.op Op.plus :: is) rel_r
+  --   cases contr with | exn hexn =>
+
+  --   exists xr, hr', isr', csr', sr'
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     apply Steps.trans_steps stepsl
+  --     exact stepsr
+
+  --   constructor
+  --   · apply exn_lemma
+  --     apply ContinuesWith.exn
+  --     assumption
+  --   constructor
+  --   assumption
+  --   intros _ _ lookup
+  --   apply extnr
+  --   apply extnl
+  --   assumption
+  -- | times_proplr evl ihl =>
+  --   rename_i er
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+  --   exists xl, hl', isl', csl', sl'
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     assumption
+  --   constructor
+  --   · apply exn_lemma
+  --     assumption
+  --   constructor
+  --   assumption
+  --   assumption
+  -- | times_proprr evl evr ihl ihr =>
+  --   rename_i r _ er _ _
+  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+  --   cases contl
+
+  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+
+  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+  --     ihr (is := Instr.op Op.times :: is) rel_r
+  --   cases contr with | exn hexn =>
+
+  --   exists xr, hr', isr', csr', sr'
+  --   constructor
+  --   · simp [compile, List.append_assoc]
+  --     apply Steps.trans_steps stepsl
+  --     exact stepsr
+
+  --   constructor
+  --   · apply exn_lemma
+  --     apply ContinuesWith.exn
+  --     assumption
+  --   constructor
+  --   assumption
+  --   intros _ _ lookup
+  --   apply extnr
+  --   apply extnl
+  --   assumption

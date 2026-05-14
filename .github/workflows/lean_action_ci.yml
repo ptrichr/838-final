@@ -1,14 +1,14 @@
-name: Lean Action CI
+# name: Lean Action CI
 
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
+# on:
+#   push:
+#   pull_request:
+#   workflow_dispatch:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v5
-      - uses: leanprover/lean-action@v1
+#     steps:
+#       - uses: actions/checkout@v5
+#       - uses: leanprover/lean-action@v1
