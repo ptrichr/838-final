@@ -654,7 +654,7 @@ theorem compiler_correct_general
 
   --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
   --     ihr (is := Instr.op Op.plus :: is) rel_r
-  --   cases contr with | exn hexn =>
+  --   cases contr with | exn =>
 
   --   exists xr, hr', isr', csr', sr'
   --   constructor
@@ -697,7 +697,7 @@ theorem compiler_correct_general
 
   --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
   --     ihr (is := Instr.op Op.times :: is) rel_r
-  --   cases contr with | exn hexn =>
+  --   cases contr with | exn =>
 
   --   exists xr, hr', isr', csr', sr'
   --   constructor
@@ -715,3 +715,44 @@ theorem compiler_correct_general
   --   apply extnr
   --   apply extnl
   --   assumption
+  | iftr evg evt ihg iht =>
+    rename_i r eg et _ ef
+    obtain ⟨ xg, hg', isg', csg', sg', stepsg, contg, reprg, extng ⟩ :=
+      ihg (is := Instr.branch (compile ds c et) (compile ds c ef) :: is) rel
+    cases contg
+    cases reprg
+    have rel_stable : Related s c r hg' := state_stability_lemma rel extng
+
+    obtain ⟨ xt, ht', ist', cst', st', stepst, contt, reprt, extnt ⟩ := iht (is := is) rel_stable
+    cases contt with
+    | val =>
+      exists xt, ht', is, cs, (xt :: s)
+      constructor
+      · simp [compile, List.append_assoc]
+        apply Steps.trans_steps stepsg
+        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchtr)
+        assumption
+      constructor
+      · apply ContinuesWith.val
+      constructor
+      assumption
+      intros _ _ look
+      apply extnt
+      apply extng
+      assumption
+    | exn =>
+      exists xt, ht', ist', cst', st'
+      constructor
+      · simp [compile, List.append_assoc]
+        apply Steps.trans_steps stepsg
+        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchtr)
+        assumption
+      constructor
+      · apply ContinuesWith.exn
+        assumption
+      constructor
+      assumption
+      intros _ _ look
+      · apply extnt
+        apply extng
+        assumption
