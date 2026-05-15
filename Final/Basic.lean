@@ -722,7 +722,6 @@ theorem compiler_correct_general
     cases contg
     cases reprg
     have rel_stable : Related s c r hg' := state_stability_lemma rel extng
-
     obtain ⟨ xt, ht', ist', cst', st', stepst, contt, reprt, extnt ⟩ := iht (is := is) rel_stable
     cases contt with
     | val =>
@@ -756,3 +755,103 @@ theorem compiler_correct_general
       · apply extnt
         apply extng
         assumption
+  | iffr evg evt ihg ihf =>
+    rename_i r eg ef _ et
+    obtain ⟨ xg, hg', isg', csg', sg', stepsg, contg, reprg, extng ⟩ :=
+      ihg (is := Instr.branch (compile ds c et) (compile ds c ef) :: is) rel
+    cases contg
+    cases reprg
+    have rel_stable : Related s c r hg' := state_stability_lemma rel extng
+    obtain ⟨ xf, hf', isf', csf', sf', stepsf, contf, reprf, extnf ⟩ := ihf (is := is) rel_stable
+    cases contf with
+    | val =>
+      exists xf, hf', is, cs, (xf :: s)
+      constructor
+      · simp [compile, List.append_assoc]
+        apply Steps.trans_steps stepsg
+        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
+        assumption
+      constructor
+      · apply ContinuesWith.val
+      constructor
+      assumption
+      intros _ _ look
+      apply extnf
+      apply extng
+      assumption
+    | exn =>
+      exists xf, hf', isf', csf', sf'
+      constructor
+      · simp [compile, List.append_assoc]
+        apply Steps.trans_steps stepsg
+        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
+        assumption
+      constructor
+      · apply ContinuesWith.exn
+        assumption
+      constructor
+      assumption
+      intros _ _ look
+      · apply extnf
+        apply extng
+        assumption
+  | if_propr ev1 ih1 =>
+    rename_i e2 e3
+    obtain ⟨ x1, h1', is1', cs1', s1', steps1, cont1, repr1, extn1 ⟩ :=
+      ih1 (is := Instr.branch (compile ds c e2) (compile ds c e3) :: is) rel
+    exists x1, h1', is1', cs1', s1'
+    constructor
+    · simp [compile, List.append_assoc]
+      exact steps1
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    · assumption
+    · assumption
+  | negtr ev ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ :=
+      ih (is := Instr.op Op.flip :: is) rel
+    cases cont
+    cases repr
+    exists 0, h', is, cs, (0 :: s)
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps steps
+      apply Steps.trans Steps.refl
+      apply Step.opr OpEval.flip1
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · apply Represents.bool
+    · assumption
+  | negfr ev ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ :=
+      ih (is := Instr.op Op.flip :: is) rel
+    cases cont
+    cases repr
+    exists 1, h', is, cs, (1 :: s)
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps steps
+      apply Steps.trans Steps.refl
+      apply Step.opr OpEval.flip0
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · apply Represents.bool
+    · assumption
+  | neg_propr ev ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ :=
+      ih (is := Instr.op Op.flip :: is) rel
+    exists x, h', is', cs', s'
+    constructor
+    · simp [compile, List.append_assoc]
+      exact steps
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    · assumption
+    · assumption
+  
