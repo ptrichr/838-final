@@ -268,6 +268,7 @@ inductive Steps : IDefns →
   Step ds is1 cs1 s1 h1 is' cs' s' h' ->
   Steps ds is cs s h is' cs' s' h'
 
+
 -- compiler
 
 abbrev CEnv := List (Option Var)
@@ -359,8 +360,8 @@ inductive Represents : Val -> Int -> Heap -> Prop where
   | pair {v1 i1 h v2 i2 i} :
     Represents v1 i1 h ->
     Represents v2 i2 h ->
-    Heap.lookup h (i+0) = i1 ->
-    Heap.lookup h (i+1) = i2 ->
+    Heap.lookup h (i+0) = some i1 ->
+    Heap.lookup h (i+1) = some i2 ->
     Represents (.pair v1 v2) i h
 
 inductive Related : Stack -> CEnv -> Env -> Heap -> Prop where
@@ -411,42 +412,31 @@ def HeapExtends (h h' : Heap) : Prop :=
   Heap.lookup h' a = some v
 
 -- lemma about heap stability
-theorem heap_stab_lemma {v i h h'} :
-  Represents v i h →
-  HeapExtends h h' →
+theorem Represents.mono {v i h h'} :
+  Represents v i h ->
+  HeapExtends h h' ->
   Represents v i h' := by
-  intro repr ext
-  induction repr with
-  | int =>
-    apply Represents.int
-  | bool =>
-    apply Represents.bool
-  | pair rl rr lookl lookr extl extr =>
-    apply Represents.pair (extl ext) (extr ext)
-    · apply ext
-      exact lookl
-    · apply ext
-      exact lookr
+  intro hrep hext
+  induction hrep with
+  | int => constructor
+  | bool => constructor
+  | pair hv1 hv2 hlook0 hlook1 ih1 ih2 =>
+    apply Represents.pair (ih1 hext) (ih2 hext)
+    · exact hext _ _ hlook0
+    · exact hext _ _ hlook1
 
 -- lemma about state stability across env/stack and heap
-theorem state_stability_lemma {s c r h h'} :
-  Related s c r h →
-  HeapExtends h h' →
+theorem Related.mono {s c r h h'} :
+  Related s c r h ->
+  HeapExtends h h' ->
   Related s c r h' := by
-  intro rel ext
-  induction rel with
-  | mt =>
-    apply Related.mt
-  | push rel_ih ih =>
-    apply Related.push
-    apply ih
-    assumption
-  | bind rel_ih repr_ih ih =>
-    apply Related.bind
-    · apply ih
-      assumption
-    · apply heap_stab_lemma repr_ih
-      assumption
+  intro hrel hext
+  induction hrel with
+  | mt => exact .mt
+  | push hrel ih =>
+    exact .push (ih hext)
+  | bind hrel hrep ih =>
+    exact .bind (ih hext) (Represents.mono hrep hext)
 
 
 -- this lemma states the rest of the instructions don't
@@ -507,86 +497,208 @@ theorem abort_exists_steps
           · apply Steps.trans Steps.refl
             apply Step.abort_handler
           · apply ExnContinuesWith.exn_handler
+def maxAbsIntList (xs : List Int) : Nat :=
+  xs.foldl (fun m x => Nat.max m (Int.natAbs x)) 0
+
+def dom (h : Heap) : List Int := h.map Prod.fst
+
+theorem le_foldl_maxAbs (acc : Nat) (xs : List Int) :
+  acc ≤ xs.foldl (fun m x => Nat.max m (Int.natAbs x)) acc := by
+  induction xs generalizing acc with
+  | nil =>
+      simp
+  | cons x xs ih =>
+      simp [List.foldl]
+      exact Nat.le_trans
+        (Nat.le_max_left acc (Int.natAbs x))
+        (ih (Nat.max acc (Int.natAbs x)))
+
+theorem natAbs_le_maxAbsIntList_of_mem {a : Int} {xs : List Int} :
+  a ∈ xs -> Int.natAbs a ≤ maxAbsIntList xs := by
+  intro hmem
+  have aux :
+    ∀ (ys : List Int) (acc : Nat),
+      a ∈ ys ->
+      Int.natAbs a ≤ ys.foldl (fun m x => Nat.max m (Int.natAbs x)) acc := by
+    intro ys
+    induction ys with
+    | nil =>
+        intro acc hmem
+        cases hmem
+    | cons x xs ih =>
+        intro acc hmem
+        simp [List.foldl]
+        simp at hmem
+        rcases hmem with hhead | htail
+        · subst hhead
+          exact Nat.le_trans
+            (Nat.le_max_right acc (Int.natAbs a))
+            (le_foldl_maxAbs (acc := Nat.max acc (Int.natAbs a)) (xs := xs))
+        · exact ih (Nat.max acc (Int.natAbs x)) htail
+  simpa [maxAbsIntList] using aux xs 0 hmem
+
+theorem lookup_some_mem_dom {h : Heap} {a v : Int} :
+  Heap.lookup h a = some v -> a ∈ dom h := by
+  intro hlook
+  induction h with
+  | nil =>
+      simp [Heap.lookup] at hlook
+  | cons p h ih =>
+      rcases p with ⟨j,k⟩
+      by_cases ha : a = j
+      · subst ha
+        simp [dom]
+      · have : Heap.lookup h a = some v := by
+          simpa [Heap.lookup, ha] using hlook
+        have hm : a ∈ dom h := ih this
+        simpa [dom] using List.mem_cons_of_mem j hm
+
+theorem exists_freshBlock (h : Heap) (n : Nat) :
+  ∃ a : Int, FreshBlock h a n := by
+  let M : Nat := maxAbsIntList (dom h)
+  refine ⟨Int.ofNat (M + 1), ?_⟩
+  intro k hk
+  cases hL : Heap.lookup h (Int.ofNat (M + 1) + Int.ofNat k) with
+  | none =>
+      rfl
+  | some v =>
+      have hmem : (Int.ofNat (M + 1) + Int.ofNat k) ∈ dom h :=
+        lookup_some_mem_dom (by simpa [hL])
+      have hbound : Int.natAbs (Int.ofNat (M + 1) + Int.ofNat k) ≤ M := by
+        simpa [M] using natAbs_le_maxAbsIntList_of_mem hmem
+      have hadd : Int.ofNat (M + 1) + Int.ofNat k = Int.ofNat (M + 1 + k) := by
+        simpa [Nat.add_assoc] using (Int.ofNat_add_ofNat (M + 1) k)
+      have hbad : M + 1 + k ≤ M := by
+        simpa [hadd] using hbound
+      have : False := by
+        have : M + 1 ≤ M := Nat.le_trans (Nat.le_add_right (M + 1) k) hbad
+        exact Nat.not_succ_le_self M (by simpa [Nat.succ_eq_add_one] using this)
+      contradiction
+
+  theorem HeapExtends.trans {h h0 h'} :
+    HeapExtends h h0 ->
+    HeapExtends h0 h' ->
+    HeapExtends h h' := by
+    intros h1 h2 i v hl
+    apply h2
+    apply h1
+    assumption
+
+theorem HeapExtends.write {h a v} :
+  Heap.lookup h a = none ->
+  HeapExtends h (Heap.ext h a v) := by
+  intro hl a' v' hl'
+  by_cases hEq : a' = a
+  · subst hEq
+    rw [hl] at hl'
+    contradiction
+  · simp [Heap.lookup, Heap.ext, hEq]
+    assumption
+
+theorem ext_lookup_of_ne {h : Heap} {a b i : Int} (hba : b ≠ a) :
+  Heap.lookup (Heap.ext h a i) b = Heap.lookup h b := by
+  simp [Heap.lookup, Heap.ext, hba]
+
+theorem HeapExtends.allocPair {h : Heap} {a i1 i2 : Int}
+    (hf : FreshBlock h a 2) :
+    HeapExtends h ((h.ext (a + 1) i2).ext (a + 0) i1) := by
+  have hw1 : HeapExtends h (Heap.ext h (a + 1) i2) :=
+    HeapExtends.write (hf 1 (by omega))
+
+  have hnone0 : Heap.lookup (Heap.ext h (a + 1) i2) (a + 0) = none := by
+    rw [ext_lookup_of_ne]
+    · exact hf 0 (by omega)
+    · omega
+
+  have hw2 :
+      HeapExtends (Heap.ext h (a + 1) i2)
+        ((Heap.ext h (a + 1) i2).ext (a + 0) i1) :=
+    HeapExtends.write hnone0
+
+  exact HeapExtends.trans hw1 hw2
 
 theorem Related.lookup {s c r x v h} :
-  Related s c r h →
-  Env.lookup r x = some v →
+  Related s c r h ->
+  Env.lookup r x = some v ->
   ∃ n i,
-    CEnv.lookup c x = some n ∧
-    s[n]? = some i ∧
+    CEnv.lookup c x = some n /\
+    s[n]? = some i /\
     Represents v i h := by
-  intro rel hlook
-  induction rel generalizing x v with
-  | mt =>
-      simp [Env.lookup] at hlook
 
-  | push rel ih =>
-      obtain ⟨n, i, hc, hs, hr⟩ := ih hlook
-      refine ⟨n.succ, i, ?_, ?_, ?_⟩
+  intros hrel hlook
+  induction hrel with
+  | mt => cases hlook
+  | push hrel' ih =>
+    rcases ih hlook with ⟨n, i, hidx, hstk⟩
+    refine ⟨n+1, i, ?_, ?_⟩
+    · simp [CEnv.lookup, hidx]
+    · simp [hstk]
+  | bind hrel' hrep ih =>
+    rename_i s i' r y v' h i
+    by_cases hxy : x = y
+    · subst hxy
+      simp [Env.lookup] at hlook
+      subst hlook
+      refine ⟨0, i, ?_, ?_⟩
       · simp [CEnv.lookup]
-        assumption
-      · simp
-        assumption
-      · assumption
+      · simpa
+    · rename_i r'
+      simp [Env.lookup, hxy] at hlook
+      rcases ih hlook with ⟨n, j, hidx, hstk⟩
+      refine ⟨n+1, j, ?_, ?_⟩
+      · simp [CEnv.lookup, hxy, hidx]
+      · simp [hstk]
 
-  | bind rel repr ih =>
-      rename_i s c r y vy h i
-      simp [Env.lookup] at hlook
-      by_cases hxy : x = y
-      · subst hxy
-        simp at hlook
-        cases hlook
-        refine ⟨0, i, ?_, ?_, ?_⟩
-        · simp [CEnv.lookup]
-        · simp
-        · assumption
-      · simp [hxy] at hlook
-        obtain ⟨n, j, hc, hs, hr⟩ := ih hlook
-        refine ⟨n.succ, j, ?_, ?_, ?_⟩
-        · simp [CEnv.lookup, hxy]
-          assumption
-        · simp
-          assumption
-        · assumption
-
-
-theorem RelatedDefns_lookup_aux {all ds f x e} :
-  Defns.lookup ds f = some (.defn f x e) →
-  ∃ n,
-    Defns.indexOf ds f = some n ∧
-    (ds.map (compile_defn all))[n]? = some (compile all [some x] e) := by
-  intro h
+theorem indexOf_exists_of_lookup {ds f x e} :
+  Defns.lookup ds f = some (.defn f x e) ->
+  ∃ n, Defns.indexOf ds f = some n := by
+  intro hlook
   induction ds with
-  | nil =>
-      simp [Defns.lookup] at h
+  | nil => cases hlook
   | cons d ds ih =>
-      cases d with
-      | defn g y body =>
-          by_cases hfg : f = g
-          · simp [Defns.lookup, hfg] at h
-            cases h
-            rename_i hy hbody
-            refine ⟨0, ?_⟩
-            constructor
-            · simp [Defns.indexOf, hfg]
-            · simp [compile_defn, hy, hbody]
-          · have htail : Defns.lookup ds f = some (.defn f x e) := by
-              simp [Defns.lookup, hfg] at h
-              assumption
-            obtain ⟨n, hnidx, hncode⟩ := ih htail
-            refine ⟨n.succ, ?_⟩
-            constructor
-            · simp [Defns.indexOf, hfg, hnidx]
-            · simp [compile_defn, hncode]
+    cases d with
+    | defn g y e' =>
+      by_cases hfg : f = g
+      · subst hfg
+        simp [Defns.lookup] at hlook
+        rcases hlook with ⟨rfl,rfl⟩
+        exact ⟨0, by simp [Defns.indexOf]⟩
+      · simp [Defns.lookup, hfg] at hlook
+        rcases ih hlook with ⟨n, hn⟩
+        exact ⟨n+1, by simp [Defns.indexOf, hfg, hn]⟩
 
-theorem RelatedDefns_lookup {ds f x e} :
-  Defns.lookup ds f = some (.defn f x e) →
-  ∃ n,
-    Defns.indexOf ds f = some n ∧
+theorem lookup_indexOf_get {ds f x e n} :
+  Defns.lookup ds f = some (Defn.defn f x e) ->
+  Defns.indexOf ds f = some n ->
+  ds[n]? = some (.defn f x e) := by
+  intros hl hi
+  induction ds generalizing n with
+  | nil => cases hl
+  | cons d ds ih =>
+    cases d with
+    | defn g y e' =>
+      by_cases hfg : f = g
+      · subst hfg
+        simp [Defns.indexOf] at hi
+        simp [Defns.lookup] at hl
+        subst hi
+        simpa
+      · simp [Defns.indexOf,hfg] at hi
+        simp [Defns.lookup,hfg] at hl
+        rcases hi with ⟨a, hia, rfl⟩
+        have := ih hl hia
+        simpa
+
+theorem RelatedDefns.lookup {ds f x e} :
+  Defns.lookup ds f = some (.defn f x e) ->
+  ∃ n, Defns.indexOf ds f = some n ∧
     (compile_defns ds)[n]? = some (compile ds [some x] e) := by
-  intro h
-  simpa [compile_defns] using
-    RelatedDefns_lookup_aux (all := ds) (ds := ds) h
+  intro hlook
+  rcases indexOf_exists_of_lookup hlook with ⟨n, hidx⟩
+  simp [compile_defns]
+  refine ⟨n, hidx, ?_⟩
+  refine ⟨_, lookup_indexOf_get hlook hidx, ?_⟩
+  simp [compile_defn]
 
 theorem compiler_correct_general
   {ds c r e a is cs s h} :
@@ -682,7 +794,7 @@ theorem compiler_correct_general
       ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
     cases contl
     -- show the heap and env are stable through compiling the first expr?
-    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_stable : Related s c r hl' := Related.mono rel extnl
     have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
     -- now that we have a new relation that represents the state after compiling
     -- we can go ahead and use the second hypothesis
@@ -713,7 +825,7 @@ theorem compiler_correct_general
       ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
     cases contl
 
-    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_stable : Related s c r hl' := Related.mono rel extnl
     have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
     obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
@@ -758,7 +870,7 @@ theorem compiler_correct_general
       ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
     cases contl
 
-    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_stable : Related s c r hl' := Related.mono rel extnl
     have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
     obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
@@ -801,7 +913,7 @@ theorem compiler_correct_general
       ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
     cases contl
 
-    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_stable : Related s c r hl' := Related.mono rel extnl
     have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
     obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
@@ -830,7 +942,7 @@ theorem compiler_correct_general
       ihg (is := Instr.branch (compile ds c et) (compile ds c ef) :: is) rel
     cases contg
     cases reprg
-    have rel_stable : Related s c r hg' := state_stability_lemma rel extng
+    have rel_stable : Related s c r hg' := Related.mono rel extng
     obtain ⟨ xt, ht', ist', cst', st', stepst, contt, reprt, extnt ⟩ := iht (is := is) rel_stable
     cases contt with
     | val =>
@@ -871,7 +983,7 @@ theorem compiler_correct_general
     cases contg
     cases reprg
     have rel_stable : Related s c r hg' :=
-      state_stability_lemma rel extng
+      Related.mono rel extng
     obtain ⟨xf, hf', isf', csf', sf', stepsf, contf, reprf, extnf⟩ :=
       ihf (is := is) rel_stable
     cases contf with
@@ -965,7 +1077,7 @@ theorem compiler_correct_general
       assumption
     · assumption
     · assumption
-    | bindr ev1 ev2 ih1 ih2 =>
+  | bindr ev1 ev2 ih1 ih2 =>
     rename_i r e1 v1 x a e2
     obtain ⟨i1, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
       ih1
@@ -973,7 +1085,7 @@ theorem compiler_correct_general
         rel
     cases cont1
     have rel_h1 : Related s c r h1 :=
-      state_stability_lemma rel ext1
+      Related.mono rel ext1
     have rel_body : Related (i1 :: s) (some x :: c) ((x, v1) :: r) h1 :=
       Related.bind rel_h1 repr1
     obtain ⟨i2, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
@@ -1107,7 +1219,7 @@ theorem compiler_correct_general
         rel
     cases cont1
     have rel_h1 : Related s c r h1 :=
-      state_stability_lemma rel ext1
+      Related.mono rel ext1
     have rel_e2 : Related (i1 :: s) (none :: c) r h1 :=
       Related.push rel_h1
     obtain ⟨i2, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
@@ -1145,7 +1257,7 @@ theorem compiler_correct_general
     · assumption
     · intro aa vv hlookup
       assumption
-    | fstr ev ih =>
+  | fstr ev ih =>
     rename_i r e v1 v2
     obtain ⟨ipair, h', is', cs', s', steps, cont, repr, extn⟩ :=
       ih (is := [.read 0] ++ is) rel
@@ -1190,7 +1302,7 @@ theorem compiler_correct_general
                 | none => []) ++ is)
         rel
     cases cont1
-    obtain ⟨n, hnidx, hncode⟩ := RelatedDefns_lookup hlookup
+    obtain ⟨n, hnidx, hncode⟩ := RelatedDefns.lookup hlookup
     have rel_fun : Related (iarg :: s) [some x] [(x, v1)] h1 :=
       Related.bind Related.mt repr1
     obtain ⟨ibody, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
@@ -1346,7 +1458,7 @@ theorem compiler_correct_general
           (Frame.ret is :: cs)
           (iexn :: s) h1 := by
         simpa using stepsb
-      obtain ⟨n, hnidx, hncode⟩ := RelatedDefns_lookup hlookup
+      obtain ⟨n, hnidx, hncode⟩ := RelatedDefns.lookup hlookup
       have rel_handler : Related (iexn :: s) [some x] [(x, v)] h1 :=
         Related.bind Related.mt repr_exn
       obtain ⟨ires, h2, ish, csh, sh, stepsh, conth, reprh, ext2⟩ :=
@@ -1418,3 +1530,50 @@ theorem compiler_correct_general
             apply ext2
             apply ext1
             assumption
+  | pairr ev1 ev2 ih1 ih2 =>
+    rename_i r e1 v1 e2 v2
+    obtain ⟨i1, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
+      ih1
+        (is := compile ds (none :: c) e2 ++ ([.alloc 2, .write 1, .write 0] ++ is))
+        rel
+    cases cont1
+    have rel_h1 : Related s c r h1 :=
+      Related.mono rel ext1
+    have rel_e2 : Related (i1 :: s) (none :: c) r h1 :=
+      Related.push rel_h1
+    obtain ⟨i2, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
+      ih2
+        (is := [.alloc 2, .write 1, .write 0] ++ is)
+        rel_e2
+    cases cont2
+    obtain ⟨a, fresh⟩ := exists_freshBlock h2 2
+    let h3 := ((h2.ext (a + 1) i2).ext (a + 0) i1)
+    have h3ext : HeapExtends h2 h3 := by
+      exact HeapExtends.allocPair fresh
+    have h1_h3 : HeapExtends h1 h3 := by
+      apply HeapExtends.trans ext2 h3ext
+    have h_h3 : HeapExtends h h3 := by
+      apply HeapExtends.trans ext1 h1_h3
+    refine ⟨a, h3, is, cs, a :: s, ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.pair e1 e2) =
+            compile ds c e1 ++ compile ds (none :: c) e2 ++ [.alloc 2, .write 1, .write 0] by rfl]
+      repeat rw [List.append_assoc]
+      apply Steps.trans_steps steps1
+      apply Steps.trans_steps steps2
+      apply Steps.trans
+      · apply Steps.trans
+        · apply Steps.trans Steps.refl
+          apply Step.allocr
+          assumption
+        · apply Step.writer
+      · apply Step.writer
+    · apply ContinuesWith.val
+    · apply Represents.pair
+      · apply Represents.mono repr1
+        assumption
+      · apply Represents.mono repr2
+        assumption
+      · simp [Heap.ext, Heap.lookup, h3]
+      · simp [Heap.ext, Heap.lookup, h3]
+        omega
+    · assumption
