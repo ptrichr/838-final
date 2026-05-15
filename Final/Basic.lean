@@ -448,6 +448,7 @@ theorem state_stability_lemma {s c r h h'} :
     · apply heap_stab_lemma repr_ih
       assumption
 
+
 -- this lemma states the rest of the instructions don't
 -- matter if we are propagating an exception since control
 -- flow is yielded to the exception
@@ -479,6 +480,114 @@ theorem Steps.trans_steps {ds is1 cs1 s1 h1 is2 cs2 s2 h2 is3 cs3 s3 h3} :
   | trans _ step ih =>
       apply Steps.trans (ih h12) step
 
+theorem abort_exists_steps
+  {ds is cs i s h} :
+  ∃ is' cs' s',
+    Steps ds (.abort :: is) cs (i :: s) h is' cs' s' h ∧
+    ExnContinuesWith is cs i is' cs' s' := by
+  induction cs generalizing is i s with
+  | nil =>
+      refine ⟨.abort :: is, [], i :: s, ?_, ?_⟩
+      · apply Steps.refl
+      · apply ExnContinuesWith.exn_nil
+  | cons fr cs ih =>
+      cases fr with
+      | ret k =>
+          obtain ⟨is', cs', s', steps_tail, exn_tail⟩ :=
+            ih (is := is) (i := i) (s := s)
+          refine ⟨is', cs', s', ?_, ?_⟩
+          · apply Steps.trans_steps
+            · apply Steps.trans Steps.refl
+              apply Step.abort_retr
+            · assumption
+          · apply ExnContinuesWith.exn_ret
+            assumption
+      | handler handle k og_stack =>
+          refine ⟨handle, .ret k :: cs, i :: og_stack, ?_, ?_⟩
+          · apply Steps.trans Steps.refl
+            apply Step.abort_handler
+          · apply ExnContinuesWith.exn_handler
+
+theorem Related.lookup {s c r x v h} :
+  Related s c r h →
+  Env.lookup r x = some v →
+  ∃ n i,
+    CEnv.lookup c x = some n ∧
+    s[n]? = some i ∧
+    Represents v i h := by
+  intro rel hlook
+  induction rel generalizing x v with
+  | mt =>
+      simp [Env.lookup] at hlook
+
+  | push rel ih =>
+      obtain ⟨n, i, hc, hs, hr⟩ := ih hlook
+      refine ⟨n.succ, i, ?_, ?_, ?_⟩
+      · simp [CEnv.lookup]
+        assumption
+      · simp
+        assumption
+      · assumption
+
+  | bind rel repr ih =>
+      rename_i s c r y vy h i
+      simp [Env.lookup] at hlook
+      by_cases hxy : x = y
+      · subst hxy
+        simp at hlook
+        cases hlook
+        refine ⟨0, i, ?_, ?_, ?_⟩
+        · simp [CEnv.lookup]
+        · simp
+        · assumption
+      · simp [hxy] at hlook
+        obtain ⟨n, j, hc, hs, hr⟩ := ih hlook
+        refine ⟨n.succ, j, ?_, ?_, ?_⟩
+        · simp [CEnv.lookup, hxy]
+          assumption
+        · simp
+          assumption
+        · assumption
+
+
+theorem RelatedDefns_lookup_aux {all ds f x e} :
+  Defns.lookup ds f = some (.defn f x e) →
+  ∃ n,
+    Defns.indexOf ds f = some n ∧
+    (ds.map (compile_defn all))[n]? = some (compile all [some x] e) := by
+  intro h
+  induction ds with
+  | nil =>
+      simp [Defns.lookup] at h
+  | cons d ds ih =>
+      cases d with
+      | defn g y body =>
+          by_cases hfg : f = g
+          · simp [Defns.lookup, hfg] at h
+            cases h
+            rename_i hy hbody
+            refine ⟨0, ?_⟩
+            constructor
+            · simp [Defns.indexOf, hfg]
+            · simp [compile_defn, hy, hbody]
+          · have htail : Defns.lookup ds f = some (.defn f x e) := by
+              simp [Defns.lookup, hfg] at h
+              assumption
+            obtain ⟨n, hnidx, hncode⟩ := ih htail
+            refine ⟨n.succ, ?_⟩
+            constructor
+            · simp [Defns.indexOf, hfg, hnidx]
+            · simp [compile_defn, hncode]
+
+theorem RelatedDefns_lookup {ds f x e} :
+  Defns.lookup ds f = some (.defn f x e) →
+  ∃ n,
+    Defns.indexOf ds f = some n ∧
+    (compile_defns ds)[n]? = some (compile ds [some x] e) := by
+  intro h
+  simpa [compile_defns] using
+    RelatedDefns_lookup_aux (all := ds) (ds := ds) h
+
 theorem compiler_correct_general
   {ds c r e a is cs s h} :
   Related s c r h →
@@ -490,231 +599,231 @@ theorem compiler_correct_general
     HeapExtends h h' := by
   intros rel eval
   induction eval generalizing is s c h cs with
-  -- | intr x =>
-  --   exists x, h, is, cs, x :: s
-  --   -- steps part of conjunction
-  --   constructor
-  --   · apply Steps.trans Steps.refl Step.pushr
-  --   -- continues part of conjunction
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   -- repr part of conjunction
-  --   constructor
-  --   · apply Represents.int
-  --   -- heap part of conjunction
-  --   · intros _ _ h_lookup
-  --     assumption
-  -- | boolr x =>
-  --   -- same idea as above but x witness is bounded
-  --   exists (if x then 1 else 0), h, is, cs, (if x then 1 else 0) :: s
-  --   constructor
-  --   · apply Steps.trans Steps.refl Step.pushr
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   constructor
-  --   · apply Represents.bool
-  --   · intro _ _ h_lookup
-  --     assumption
-  -- | succr e ih =>
-  --   -- wow learning this tactic would have made earlier proofs a lot more concise
-  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
-  --   simp [compile, List.append_assoc]
-  --   cases cont
-  --   exists (x + 1), h', is, cs, (x + 1) :: s
-  --   constructor
-  --   · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   constructor
-  --   · cases repr
-  --     apply Represents.int
-  --   assumption
-  -- | predr e ih =>
-  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
-  --   simp [compile, List.append_assoc]
-  --   cases cont
-  --   exists (x - 1), h', is, cs, (x - 1) :: s
-  --   constructor
-  --   · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   constructor
-  --   · cases repr
-  --     apply Represents.int
-  --   assumption
-  -- | succ_propr e ih =>
-  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
-  --   exists x, h', is', cs', s'
-  --   simp [compile, List.append_assoc]
-  --   constructor
-  --   · assumption
-  --   constructor
-  --   · apply exn_lemma
-  --     assumption
-  --   constructor
-  --   assumption
-  --   assumption
-  -- | pred_propr e ih =>
-  --   obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
-  --   exists x, h', is', cs', s'
-  --   simp [compile, List.append_assoc]
-  --   constructor
-  --   · assumption
-  --   constructor
-  --   · apply exn_lemma
-  --     assumption
-  --   constructor
-  --   assumption
-  --   assumption
-  -- | plusr evl evr ihl ihr =>
-  --   rename_i r el il er ir
-  --   -- draw from the first inductive hypothesis
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
-  --   cases contl
-  --   -- show the heap and env are stable through compiling the first expr?
-  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
-  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
-  --   -- now that we have a new relation that represents the state after compiling
-  --   -- we can go ahead and use the second hypothesis
-  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
-  --     ihr (is := Instr.op Op.plus :: is) rel_r
-  --   cases contr
-  --   -- show the conjunction holds
-  --   exists (xl + xr), hr', is, cs, (xl + xr) :: s
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     apply Steps.trans_steps stepsl
-  --     apply Steps.trans_steps stepsr
-  --     apply Steps.trans Steps.refl
-  --     apply Step.opr OpEval.plus
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   constructor
-  --   · cases reprl
-  --     cases reprr
-  --     apply Represents.int
-  --   intros _ _ lookup
-  --   apply extnr
-  --   apply extnl
-  --   assumption
-  -- | timesr evl evr ihl ihr =>
-  --   rename_i r el il er ir
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
-  --   cases contl
+  | intr x =>
+    exists x, h, is, cs, x :: s
+    -- steps part of conjunction
+    constructor
+    · apply Steps.trans Steps.refl Step.pushr
+    -- continues part of conjunction
+    constructor
+    · apply ContinuesWith.val
+    -- repr part of conjunction
+    constructor
+    · apply Represents.int
+    -- heap part of conjunction
+    · intros _ _ h_lookup
+      assumption
+  | boolr x =>
+    -- same idea as above but x witness is bounded
+    exists (if x then 1 else 0), h, is, cs, (if x then 1 else 0) :: s
+    constructor
+    · apply Steps.trans Steps.refl Step.pushr
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · apply Represents.bool
+    · intro _ _ h_lookup
+      assumption
+  | succr e ih =>
+    -- wow learning this tactic would have made earlier proofs a lot more concise
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
+    simp [compile, List.append_assoc]
+    cases cont
+    exists (x + 1), h', is, cs, (x + 1) :: s
+    constructor
+    · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · cases repr
+      apply Represents.int
+    assumption
+  | predr e ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
+    simp [compile, List.append_assoc]
+    cases cont
+    exists (x - 1), h', is, cs, (x - 1) :: s
+    constructor
+    · apply Steps.trans (Steps.trans steps Step.pushr) (Step.opr OpEval.plus)
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · cases repr
+      apply Represents.int
+    assumption
+  | succ_propr e ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push 1, .op .plus] ++ is) rel
+    exists x, h', is', cs', s'
+    simp [compile, List.append_assoc]
+    constructor
+    · assumption
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    assumption
+    assumption
+  | pred_propr e ih =>
+    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ := ih (is := [.push (-1), .op .plus] ++ is) rel
+    exists x, h', is', cs', s'
+    simp [compile, List.append_assoc]
+    constructor
+    · assumption
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    assumption
+    assumption
+  | plusr evl evr ihl ihr =>
+    rename_i r el il er ir
+    -- draw from the first inductive hypothesis
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+    cases contl
+    -- show the heap and env are stable through compiling the first expr?
+    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+    -- now that we have a new relation that represents the state after compiling
+    -- we can go ahead and use the second hypothesis
+    obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+      ihr (is := Instr.op Op.plus :: is) rel_r
+    cases contr
+    -- show the conjunction holds
+    exists (xl + xr), hr', is, cs, (xl + xr) :: s
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps stepsl
+      apply Steps.trans_steps stepsr
+      apply Steps.trans Steps.refl
+      apply Step.opr OpEval.plus
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · cases reprl
+      cases reprr
+      apply Represents.int
+    intros _ _ lookup
+    apply extnr
+    apply extnl
+    assumption
+  | timesr evl evr ihl ihr =>
+    rename_i r el il er ir
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+    cases contl
 
-  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
-  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
-  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
-  --     ihr (is := Instr.op Op.times :: is) rel_r
-  --   cases contr
+    obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+      ihr (is := Instr.op Op.times :: is) rel_r
+    cases contr
 
-  --   exists (xl * xr), hr', is, cs, (xl * xr) :: s
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     apply Steps.trans_steps stepsl
-  --     apply Steps.trans_steps stepsr
-  --     apply Steps.trans Steps.refl
-  --     apply Step.opr OpEval.mult
-  --   constructor
-  --   · apply ContinuesWith.val
-  --   constructor
-  --   · cases reprl
-  --     cases reprr
-  --     apply Represents.int
-  --   intros _ _ lookup
-  --   apply extnr
-  --   apply extnl
-  --   assumption
+    exists (xl * xr), hr', is, cs, (xl * xr) :: s
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps stepsl
+      apply Steps.trans_steps stepsr
+      apply Steps.trans Steps.refl
+      apply Step.opr OpEval.mult
+    constructor
+    · apply ContinuesWith.val
+    constructor
+    · cases reprl
+      cases reprr
+      apply Represents.int
+    intros _ _ lookup
+    apply extnr
+    apply extnl
+    assumption
   -- compiling the left expr gives us an error
-  -- | plus_proplr evl ihl =>
-  --   rename_i _ _ _ er
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
-  --   exists xl, hl', isl', csl', sl'
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     assumption
-  --   constructor
-  --   · apply exn_lemma
-  --     assumption
-  --   constructor
-  --   assumption
-  --   assumption
-  -- | plus_proprr evl evr ihl ihr =>
-  --   rename_i r _ er _ _
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
-  --   cases contl
+  | plus_proplr evl ihl =>
+    rename_i _ _ _ er
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+    exists xl, hl', isl', csl', sl'
+    constructor
+    · simp [compile, List.append_assoc]
+      assumption
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    assumption
+    assumption
+  | plus_proprr evl evr ihl ihr =>
+    rename_i r _ er _ _
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (is := compile ds (none :: c) er ++ Instr.op Op.plus :: is) rel
+    cases contl
 
-  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
-  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
-  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
-  --     ihr (is := Instr.op Op.plus :: is) rel_r
-  --   cases contr with | exn =>
+    obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+      ihr (is := Instr.op Op.plus :: is) rel_r
+    cases contr with | exn =>
 
-  --   exists xr, hr', isr', csr', sr'
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     apply Steps.trans_steps stepsl
-  --     exact stepsr
+    exists xr, hr', isr', csr', sr'
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps stepsl
+      exact stepsr
 
-  --   constructor
-  --   · apply exn_lemma
-  --     apply ContinuesWith.exn
-  --     assumption
-  --   constructor
-  --   assumption
-  --   intros _ _ lookup
-  --   apply extnr
-  --   apply extnl
-  --   assumption
-  -- | times_proplr evl ihl =>
-  --   rename_i er
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
-  --   exists xl, hl', isl', csl', sl'
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     assumption
-  --   constructor
-  --   · apply exn_lemma
-  --     assumption
-  --   constructor
-  --   assumption
-  --   assumption
-  -- | times_proprr evl evr ihl ihr =>
-  --   rename_i r _ er _ _
-  --   obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
-  --     ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
-  --   cases contl
+    constructor
+    · apply exn_lemma
+      apply ContinuesWith.exn
+      assumption
+    constructor
+    assumption
+    intros _ _ lookup
+    apply extnr
+    apply extnl
+    assumption
+  | times_proplr evl ihl =>
+    rename_i er
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (cs := cs) (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+    exists xl, hl', isl', csl', sl'
+    constructor
+    · simp [compile, List.append_assoc]
+      assumption
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    assumption
+    assumption
+  | times_proprr evl evr ihl ihr =>
+    rename_i r _ er _ _
+    obtain ⟨ xl, hl', isl', csl', sl', stepsl, contl, reprl, extnl ⟩ :=
+      ihl (is := compile ds (none :: c) er ++ Instr.op Op.times :: is) rel
+    cases contl
 
-  --   have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
-  --   have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
+    have rel_stable : Related s c r hl' := state_stability_lemma rel extnl
+    have rel_r : Related (xl :: s) (none :: c) r hl' := Related.push rel_stable
 
-  --   obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
-  --     ihr (is := Instr.op Op.times :: is) rel_r
-  --   cases contr with | exn =>
+    obtain ⟨ xr, hr', isr', csr', sr', stepsr, contr, reprr, extnr ⟩ :=
+      ihr (is := Instr.op Op.times :: is) rel_r
+    cases contr with | exn =>
 
-  --   exists xr, hr', isr', csr', sr'
-  --   constructor
-  --   · simp [compile, List.append_assoc]
-  --     apply Steps.trans_steps stepsl
-  --     exact stepsr
+    exists xr, hr', isr', csr', sr'
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps stepsl
+      exact stepsr
 
-  --   constructor
-  --   · apply exn_lemma
-  --     apply ContinuesWith.exn
-  --     assumption
-  --   constructor
-  --   assumption
-  --   intros _ _ lookup
-  --   apply extnr
-  --   apply extnl
-  --   assumption
+    constructor
+    · apply exn_lemma
+      apply ContinuesWith.exn
+      assumption
+    constructor
+    assumption
+    intros _ _ lookup
+    apply extnr
+    apply extnl
+    assumption
   | iftr evg evt ihg iht =>
     rename_i r eg et _ ef
     obtain ⟨ xg, hg', isg', csg', sg', stepsg, contg, reprg, extng ⟩ :=
@@ -755,58 +864,60 @@ theorem compiler_correct_general
       · apply extnt
         apply extng
         assumption
-  | iffr evg evt ihg ihf =>
+  | iffr evg evf ihg ihf =>
     rename_i r eg ef _ et
-    obtain ⟨ xg, hg', isg', csg', sg', stepsg, contg, reprg, extng ⟩ :=
+    obtain ⟨xg, hg', isg', csg', sg', stepsg, contg, reprg, extng⟩ :=
       ihg (is := Instr.branch (compile ds c et) (compile ds c ef) :: is) rel
     cases contg
     cases reprg
-    have rel_stable : Related s c r hg' := state_stability_lemma rel extng
-    obtain ⟨ xf, hf', isf', csf', sf', stepsf, contf, reprf, extnf ⟩ := ihf (is := is) rel_stable
+    have rel_stable : Related s c r hg' :=
+      state_stability_lemma rel extng
+    obtain ⟨xf, hf', isf', csf', sf', stepsf, contf, reprf, extnf⟩ :=
+      ihf (is := is) rel_stable
     cases contf with
     | val =>
-      exists xf, hf', is, cs, (xf :: s)
-      constructor
-      · simp [compile, List.append_assoc]
+      refine ⟨xf, hf', is, cs, xf :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.ifte eg et ef) =
+              compile ds c eg ++
+                [Instr.branch (compile ds c et) (compile ds c ef)] by rfl]
+        rw [List.append_assoc]
         apply Steps.trans_steps stepsg
         apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
         assumption
-      constructor
       · apply ContinuesWith.val
-      constructor
-      assumption
-      intros _ _ look
-      apply extnf
-      apply extng
-      assumption
-    | exn =>
-      exists xf, hf', isf', csf', sf'
-      constructor
-      · simp [compile, List.append_assoc]
-        apply Steps.trans_steps stepsg
-        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
-        assumption
-      constructor
-      · apply ContinuesWith.exn
-        assumption
-      constructor
-      assumption
-      intros _ _ look
-      · apply extnf
+      · assumption
+      · intro a v look
+        apply extnf
         apply extng
         assumption
-  | if_propr ev1 ih1 =>
-    rename_i e2 e3
-    obtain ⟨ x1, h1', is1', cs1', s1', steps1, cont1, repr1, extn1 ⟩ :=
-      ih1 (is := Instr.branch (compile ds c e2) (compile ds c e3) :: is) rel
-    exists x1, h1', is1', cs1', s1'
-    constructor
-    · simp [compile, List.append_assoc]
-      exact steps1
-    constructor
+    | exn h_exn =>
+      refine ⟨xf, hf', isf', csf', sf', ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.ifte eg et ef) =
+              compile ds c eg ++
+                [Instr.branch (compile ds c et) (compile ds c ef)] by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans_steps stepsg
+        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
+        assumption
+      · apply ContinuesWith.exn
+        assumption
+      · assumption
+      · intro a v look
+        apply extnf
+        apply extng
+        assumption
+  | if_propr evg ihg =>
+    rename_i r eg v et ef
+    obtain ⟨xg, hg', isg', csg', sg', stepsg, contg, reprg, extng⟩ :=
+      ihg (is := Instr.branch (compile ds c et) (compile ds c ef) :: is) rel
+    refine ⟨xg, hg', isg', csg', sg', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.ifte eg et ef) =
+            compile ds c eg ++
+              [Instr.branch (compile ds c et) (compile ds c ef)] by rfl]
+      rw [List.append_assoc]
+      assumption
     · apply exn_lemma
       assumption
-    constructor
     · assumption
     · assumption
   | negtr ev ih =>
@@ -842,16 +953,367 @@ theorem compiler_correct_general
     · apply Represents.bool
     · assumption
   | neg_propr ev ih =>
-    obtain ⟨ x, h', is', cs', s', steps, cont, repr, extn ⟩ :=
-      ih (is := Instr.op Op.flip :: is) rel
-    exists x, h', is', cs', s'
-    constructor
-    · simp [compile, List.append_assoc]
-      exact steps
-    constructor
+    rename_i r e v
+    obtain ⟨x, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.op .flip] ++ is) rel
+    refine ⟨x, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.neg e) =
+            compile ds c e ++ [.op .flip] by rfl]
+      rw [List.append_assoc]
+      assumption
     · apply exn_lemma
       assumption
-    constructor
     · assumption
     · assumption
-  
+    | bindr ev1 ev2 ih1 ih2 =>
+    rename_i r e1 v1 x a e2
+    obtain ⟨i1, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
+      ih1
+        (is := compile ds (some x :: c) e2 ++ ([.exch, .pop] ++ is))
+        rel
+    cases cont1
+    have rel_h1 : Related s c r h1 :=
+      state_stability_lemma rel ext1
+    have rel_body : Related (i1 :: s) (some x :: c) ((x, v1) :: r) h1 :=
+      Related.bind rel_h1 repr1
+    obtain ⟨i2, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
+      ih2
+        (is := [.exch, .pop] ++ is)
+        rel_body
+    cases cont2 with
+    | val =>
+      refine ⟨i2, h2, is, cs, i2 :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.bind x e1 e2) =
+              compile ds c e1 ++ compile ds (some x :: c) e2 ++ [.exch, .pop] by rfl]
+        repeat rw [List.append_assoc]
+        apply Steps.trans_steps steps1
+        apply Steps.trans_steps steps2
+        apply Steps.trans
+        · apply Steps.trans Steps.refl
+          apply Step.exchr
+        · apply Step.popr
+      · apply ContinuesWith.val
+      · assumption
+      · intro aa vv hlookup
+        apply ext2
+        apply ext1
+        assumption
+    | exn h_exn =>
+      refine ⟨i2, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.bind x e1 e2) =
+              compile ds c e1 ++ compile ds (some x :: c) e2 ++ [.exch, .pop] by rfl]
+        repeat rw [List.append_assoc]
+        apply Steps.trans_steps steps1
+        assumption
+      · apply exn_lemma
+        apply ContinuesWith.exn
+        assumption
+      · assumption
+      · intro aa vv hlookup
+        apply ext2
+        apply ext1
+        assumption
+  | bind_propr ev ih =>
+    rename_i e1 v x e2
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih
+        (is := compile ds (some x :: c) e2 ++ ([.exch, .pop] ++ is))
+        rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.bind x e1 e2) =
+            compile ds c e1 ++ compile ds (some x :: c) e2 ++ [.exch, .pop] by rfl]
+      repeat rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | call_propr ev ih =>
+    rename_i r e f v
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih
+        (is := (match Defns.indexOf ds f with
+                | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                | none => []) ++ is)
+        rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.call f e) =
+            compile ds c e ++
+              (match Defns.indexOf ds f with
+               | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+               | none => []) by rfl]
+      rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | fst_propr ev ih =>
+    rename_i r e v
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read 0] ++ is) rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.fst e) = compile ds c e ++ [.read 0] by rfl]
+      rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | snd_propr ev ih =>
+    rename_i r e v
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read 1] ++ is) rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.snd e) = compile ds c e ++ [.read 1] by rfl]
+      rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | throw_propr ev ih =>
+    rename_i r e v
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.abort] ++ is) rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.throw e) = compile ds c e ++ [.abort] by rfl]
+      rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | pair_proplr ev ih =>
+    rename_i r e1 v e2
+    obtain ⟨i, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih
+        (is := compile ds (none :: c) e2 ++ ([.alloc 2, .write 1, .write 0] ++ is))
+        rel
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.pair e1 e2) =
+            compile ds c e1 ++ compile ds (none :: c) e2 ++ [.alloc 2, .write 1, .write 0] by rfl]
+      repeat rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | pair_proprr ev1 ev2 ih1 ih2 =>
+    rename_i r e1 e2 v1 v2
+    obtain ⟨i1, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
+      ih1
+        (is := compile ds (none :: c) e2 ++ ([.alloc 2, .write 1, .write 0] ++ is))
+        rel
+    cases cont1
+    have rel_h1 : Related s c r h1 :=
+      state_stability_lemma rel ext1
+    have rel_e2 : Related (i1 :: s) (none :: c) r h1 :=
+      Related.push rel_h1
+    obtain ⟨i2, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
+      ih2
+        (is := [.alloc 2, .write 1, .write 0] ++ is)
+        rel_e2
+    cases cont2 with
+    | exn h_exn =>
+      refine ⟨i2, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.pair e1 e2) =
+              compile ds c e1 ++ compile ds (none :: c) e2 ++ [.alloc 2, .write 1, .write 0] by rfl]
+        repeat rw [List.append_assoc]
+        apply Steps.trans_steps steps1
+        assumption
+      · apply exn_lemma
+        apply ContinuesWith.exn
+        assumption
+      · assumption
+      · intro aa vv hlookup
+        apply ext2
+        apply ext1
+        assumption
+  | varr hlook =>
+    obtain ⟨n, i, hc, hs, hrepr⟩ := Related.lookup rel hlook
+    refine ⟨i, h, is, cs, i :: s, ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.var _) =
+            match CEnv.lookup c _ with
+            | some n => [.get n]
+            | none => [] by rfl]
+      rw [hc]
+      apply Steps.trans Steps.refl
+      apply Step.getr
+      assumption
+    · apply ContinuesWith.val
+    · assumption
+    · intro aa vv hlookup
+      assumption
+    | fstr ev ih =>
+    rename_i r e v1 v2
+    obtain ⟨ipair, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read 0] ++ is) rel
+    cases cont
+    cases repr with
+    | pair repr1 repr2 look1 look2 =>
+      rename_i i1 i2
+      refine ⟨i1, h', is, cs, i1 :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.fst e) = compile ds c e ++ [.read 0] by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans
+        · assumption
+        · apply Step.readr
+          assumption
+      · apply ContinuesWith.val
+      · assumption
+      · assumption
+  | sndr ev ih =>
+    rename_i r e v1 v2
+    obtain ⟨ipair, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read 1] ++ is) rel
+    cases cont
+    cases repr with
+    | pair repr1 repr2 look1 look2 =>
+      rename_i i1 i2
+      refine ⟨i2, h', is, cs, i2 :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.snd e) = compile ds c e ++ [.read 1] by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans
+        · assumption
+        · apply Step.readr
+          assumption
+      · apply ContinuesWith.val
+      · assumption
+      · assumption
+  | callr eva hlookup evbody iha ihbody =>
+    rename_i r e v1 f x e' a
+    obtain ⟨iarg, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
+      iha
+        (is := (match Defns.indexOf ds f with
+                | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                | none => []) ++ is)
+        rel
+    cases cont1
+    obtain ⟨n, hnidx, hncode⟩ := RelatedDefns_lookup hlookup
+    have rel_fun : Related (iarg :: s) [some x] [(x, v1)] h1 :=
+      Related.bind Related.mt repr1
+    obtain ⟨ibody, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
+      ihbody
+        (is := [.exch, .pop] ++ is)
+        rel_fun
+    cases cont2 with
+    | val =>
+      refine ⟨ibody, h2, is, cs, ibody :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.call f e) =
+              compile ds c e ++
+                (match Defns.indexOf ds f with
+                 | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                 | none => []) by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans_steps steps1
+        rw [hnidx]
+        apply Steps.trans_steps
+        · apply Steps.trans
+          · apply Steps.trans Steps.refl
+            apply Step.pushr
+          · apply Step.callr
+            simpa using hncode
+        apply Steps.trans_steps steps2
+        apply Steps.trans
+        · apply Steps.trans Steps.refl
+          apply Step.exchr
+        · apply Step.popr
+      · apply ContinuesWith.val
+      · assumption
+      · intro aa vv hlook
+        apply ext2
+        apply ext1
+        assumption
+    | exn h_exn =>
+      refine ⟨ibody, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.call f e) =
+              compile ds c e ++
+                (match Defns.indexOf ds f with
+                 | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                 | none => []) by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans_steps steps1
+        rw [hnidx]
+        apply Steps.trans_steps
+        · apply Steps.trans
+          · apply Steps.trans Steps.refl
+            apply Step.pushr
+          · apply Step.callr
+            simpa using hncode
+        assumption
+      · apply exn_lemma
+        apply ContinuesWith.exn
+        assumption
+      · assumption
+      · intro aa vv hlook
+        apply ext2
+        apply ext1
+        assumption
+  | throwr ev ih =>
+    rename_i r e v
+    obtain ⟨i, h', is1, cs1, s1, steps, cont, repr, extn⟩ :=
+      ih (is := [.abort] ++ is) rel
+    cases cont
+    obtain ⟨is', cs', s', abortsteps, exncont⟩ :=
+      abort_exists_steps
+        (ds := compile_defns ds)
+        (is := is)
+        (cs := cs)
+        (i := i)
+        (s := s)
+        (h := h')
+    refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.throw e) =
+            compile ds c e ++ [.abort] by rfl]
+      rw [List.append_assoc]
+      apply Steps.trans_steps steps
+      assumption
+    · apply ContinuesWith.exn
+      assumption
+    · assumption
+    · assumption
+  | handle_valr ev ih =>
+    rename_i r e v f
+    obtain ⟨i, h', isb, csb, sb, stepsb, contb, repr, extn⟩ :=
+      ih
+        (is := ([] : Instrs))
+        (cs := Frame.handler
+          (match Defns.indexOf ds f with
+           | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+           | none => [])
+          is s :: cs)
+        rel
+    cases contb
+    have stepsb' :
+      Steps (compile_defns ds)
+        (compile ds c e)
+        (Frame.handler
+          (match Defns.indexOf ds f with
+           | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+           | none => [])
+          is s :: cs)
+        s h
+        ([] : Instrs)
+        (Frame.handler
+          (match Defns.indexOf ds f with
+           | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+           | none => [])
+          is s :: cs)
+        (i :: s) h' := by
+      simpa using stepsb
+    refine ⟨i, h', is, cs, i :: s, ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.handle e f) =
+            [.trycatch (compile ds c e)
+              (match Defns.indexOf ds f with
+               | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+               | none => [])] by rfl]
+      apply Steps.trans_steps
+      · apply Steps.trans Steps.refl
+        apply Step.trycatchr
+      apply Steps.trans_steps stepsb'
+      apply Steps.trans Steps.refl
+      apply Step.ret_handler
+    · apply ContinuesWith.val
+    · assumption
+    · assumption
