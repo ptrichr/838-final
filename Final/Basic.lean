@@ -1317,3 +1317,104 @@ theorem compiler_correct_general
     · apply ContinuesWith.val
     · assumption
     · assumption
+  | handle_exnr ev hlookup evh ihbody ihhandler =>
+    rename_i r e v f x e' a
+    obtain ⟨iexn, h1, isb, csb, sb, stepsb, contb, repr_exn, ext1⟩ :=
+      ihbody
+        (is := ([] : Instrs))
+        (cs := Frame.handler
+          (match Defns.indexOf ds f with
+           | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+           | none => [])
+          is s :: cs)
+        rel
+    cases contb with
+    | exn hcw =>
+      cases hcw
+      have stepsb' :
+        Steps (compile_defns ds)
+          (compile ds c e)
+          (Frame.handler
+            (match Defns.indexOf ds f with
+             | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+             | none => [])
+            is s :: cs)
+          s h
+          (match Defns.indexOf ds f with
+           | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+           | none => [])
+          (Frame.ret is :: cs)
+          (iexn :: s) h1 := by
+        simpa using stepsb
+      obtain ⟨n, hnidx, hncode⟩ := RelatedDefns_lookup hlookup
+      have rel_handler : Related (iexn :: s) [some x] [(x, v)] h1 :=
+        Related.bind Related.mt repr_exn
+      obtain ⟨ires, h2, ish, csh, sh, stepsh, conth, reprh, ext2⟩ :=
+        ihhandler
+          (is := [.exch, .pop])
+          (cs := Frame.ret is :: cs)
+          rel_handler
+      cases conth with
+      | val =>
+        refine ⟨ires, h2, is, cs, ires :: s, ?_, ?_, ?_, ?_⟩
+        · rw [show compile ds c (.handle e f) =
+                [.trycatch
+                  (compile ds c e)
+                  (match Defns.indexOf ds f with
+                   | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                   | none => [])] by rfl]
+          apply Steps.trans_steps
+          · apply Steps.trans Steps.refl
+            apply Step.trycatchr
+          apply Steps.trans_steps stepsb'
+          rw [hnidx]
+          apply Steps.trans_steps
+          · apply Steps.trans
+            · apply Steps.trans Steps.refl
+              apply Step.pushr
+            · apply Step.callr
+              simpa using hncode
+          apply Steps.trans_steps stepsh
+          apply Steps.trans_steps
+          · apply Steps.trans
+            · apply Steps.trans Steps.refl
+              apply Step.exchr
+            · apply Step.popr
+          apply Steps.trans Steps.refl
+          apply Step.retr
+        · apply ContinuesWith.val
+        · assumption
+        · intro aa vv hlook
+          apply ext2
+          apply ext1
+          assumption
+      | exn h_handler_exn =>
+        cases h_handler_exn with
+        | exn_ret h_tail =>
+          refine ⟨ires, h2, ish, csh, sh, ?_, ?_, ?_, ?_⟩
+          · rw [show compile ds c (.handle e f) =
+                  [.trycatch
+                    (compile ds c e)
+                    (match Defns.indexOf ds f with
+                     | some n => [.push (Int.ofNat n), .call, .exch, .pop]
+                     | none => [])] by rfl]
+            apply Steps.trans_steps
+            · apply Steps.trans Steps.refl
+              apply Step.trycatchr
+            apply Steps.trans_steps stepsb'
+            rw [hnidx]
+            apply Steps.trans_steps
+            · apply Steps.trans
+              · apply Steps.trans Steps.refl
+                apply Step.pushr
+              · apply Step.callr
+                simpa using hncode
+            assumption
+          · apply exn_lemma
+            apply ContinuesWith.exn
+            assumption
+          · assumption
+          · intro aa vv hlook
+            apply ext2
+            apply ext1
+            assumption
