@@ -19,6 +19,9 @@ inductive Expr where
   | snd (e : Expr) : Expr
   | throw (e : Expr) : Expr
   | handle (e : Expr) (f : Var) : Expr
+  | vec (es : List Expr) : Expr
+  | vget (e : Expr) (i : Nat) : Expr
+  | vset (e : Expr) (i : Nat) (v : Expr) : Expr
 
 inductive Defn where
   | defn (f x : Var) (e : Expr)
@@ -27,10 +30,12 @@ inductive Val where
   | int (i : Int) : Val
   | bool (b : Bool) : Val
   | pair (v1 v2 : Val)
+  | vec (vs : List Val)
 
 inductive Ans where
   | val (v : Val) : Ans
   | exn (v : Val) : Ans
+  | vals (vs : List Val) : Ans
 
 abbrev Env := List (Var × Val)
 
@@ -164,6 +169,38 @@ inductive Eval : Defns → Env → Expr → Ans → Prop where
     Defns.lookup ds f = some (.defn f x e') →
     Eval ds [(x,v)] e' a →
     Eval ds r (.handle e f) a
+    | vec_nilr {ds r} :
+    Eval ds r (.vec []) (.val (.vec []))
+  | vec_consr {ds r e es v vs} :
+    Eval ds r e (.val v) →
+    Eval ds r (.vec es) (.val (.vec vs)) →
+    Eval ds r (.vec (e :: es)) (.val (.vec (v :: vs)))
+  | vec_proplr {ds r e es v} :
+    Eval ds r e (.exn v) →
+    Eval ds r (.vec (e :: es)) (.exn v)
+  | vec_proprr {ds r e es v v'} :
+    Eval ds r e (.val v) →
+    Eval ds r (.vec es) (.exn v') →
+    Eval ds r (.vec (e :: es)) (.exn v')
+  | vgetr {ds r e i vs v} :
+    Eval ds r e (.val (.vec vs)) →
+    vs[i]? = some v →
+    Eval ds r (.vget e i) (.val v)
+  | vget_propr {ds r e i v} :
+    Eval ds r e (.exn v) →
+    Eval ds r (.vget e i) (.exn v)
+  | vsetr {ds r e i e_v vs v v_old} :
+    Eval ds r e (.val (.vec vs)) →
+    Eval ds r e_v (.val v) →
+    vs[i]? = some v_old →
+    Eval ds r (.vset e i e_v) (.val (.vec (vs.set i v)))
+  | vset_proplr {ds r e i e_v v} :
+    Eval ds r e (.exn v) →
+    Eval ds r (.vset e i e_v) (.exn v)
+  | vset_proprr {ds r e i e_v vs v} :
+    Eval ds r e (.val (.vec vs)) →
+    Eval ds r e_v (.exn v) →
+    Eval ds r (.vset e i e_v) (.exn v)
 
 
 -- A little stack machine semantics
@@ -344,6 +381,22 @@ def compile (ds : Defns) (c : CEnv) (e : Expr) : List Instr :=
       (match Defns.indexOf ds f with
        | some n => [.push (Int.ofNat n), .call, .exch, .pop]
        | none   => [])]
+  | .vec es =>
+    let rec build_vec (i : Nat) (es' : List Expr) : List Instr :=
+      match es' with
+      | [] => []
+      | e' :: rest =>
+        compile ds (none :: c) e' ++
+        [.exch, .write (Int.ofNat i)] ++
+        build_vec (i + 1) rest
+    [.alloc es.length] ++ build_vec 0 es
+  | .vget e i =>
+    compile ds c e ++
+    [.read (Int.ofNat i)]
+  | .vset e i v =>
+    compile ds c e ++
+    compile ds (none :: c) v ++
+    [.exch, .write (Int.ofNat i)]
 
 def compile_defn (ds : Defns) (d : Defn) :=
   match d with
@@ -363,6 +416,11 @@ inductive Represents : Val -> Int -> Heap -> Prop where
     Heap.lookup h (i+0) = some i1 ->
     Heap.lookup h (i+1) = some i2 ->
     Represents (.pair v1 v2) i h
+  | vec {vs ptr h} (ivs : Nat → Int) :
+      -- `ivs` is a function that maps an index `k` to its physical Int representation.
+      (∀ k v, vs[k]? = some v → Represents v (ivs k) h) →
+      (∀ k v, vs[k]? = some v → Heap.lookup h (ptr + Int.ofNat k) = some (ivs k)) →
+      Represents (.vec vs) ptr h
 
 inductive Related : Stack -> CEnv -> Env -> Heap -> Prop where
   | mt {s h} : Related s [] [] h
@@ -377,6 +435,7 @@ inductive Related : Stack -> CEnv -> Env -> Heap -> Prop where
 def AnsRep : Ans → Int → Heap → Prop
   | .val v, i, h => Represents v i h
   | .exn v, i, h => Represents v i h
+  | .vals vs, i, h => Represents (.vec vs) i h
 
 -- * values return normally;
 -- * exceptions skip .ret frames;
@@ -424,6 +483,13 @@ theorem Represents.mono {v i h h'} :
     apply Represents.pair (ih1 hext) (ih2 hext)
     · exact hext _ _ hlook0
     · exact hext _ _ hlook1
+  | vec ivs hrep_vs hlook_vs ih =>
+    apply Represents.vec ivs
+    · intro k v hk
+      exact ih k v hk hext
+    · intro k v hk
+
+      exact hext _ _ (hlook_vs k v hk)
 
 -- lemma about state stability across env/stack and heap
 theorem Related.mono {s c r h h'} :
@@ -437,7 +503,6 @@ theorem Related.mono {s c r h h'} :
     exact .push (ih hext)
   | bind hrel hrep ih =>
     exact .bind (ih hext) (Represents.mono hrep hext)
-
 
 -- this lemma states the rest of the instructions don't
 -- matter if we are propagating an exception since control
@@ -700,6 +765,7 @@ theorem RelatedDefns.lookup {ds f x e} :
   refine ⟨_, lookup_indexOf_get hlook hidx, ?_⟩
   simp [compile_defn]
 
+set_option maxHeartbeats 0
 theorem compiler_correct_general
   {ds c r e a is cs s h} :
   Related s c r h →
@@ -1577,3 +1643,89 @@ theorem compiler_correct_general
       · simp [Heap.ext, Heap.lookup, h3]
         omega
     · assumption
+  | vec_nilr =>
+    obtain ⟨ptr, fresh⟩ := exists_freshBlock h 0
+    refine ⟨ptr, h, is, cs, ptr :: s, ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.vec []) = [.alloc 0] by rfl]
+      apply Steps.trans Steps.refl
+      apply Step.allocr
+      exact fresh
+    · apply ContinuesWith.val
+    · apply Represents.vec (fun _ => 0)
+      · intro k v hk; simp at hk
+      · intro k v hk; simp at hk
+    · intro a v hlook; assumption
+  | vec_consr => sorry
+  | vec_proplr => sorry
+  | vec_proprr => sorry
+  | vget_propr ev ih =>
+    rename_i r e i v
+    obtain ⟨iexn, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read (Int.ofNat i)] ++ is) rel
+    refine ⟨iexn, h', is', cs', s', ?_, ?_, ?_, ?_⟩
+    · rw [show compile ds c (.vget e i) = compile ds c e ++ [.read (Int.ofNat i)] by rfl]
+      rw [List.append_assoc]
+      assumption
+    · apply exn_lemma
+      assumption
+    · assumption
+    · assumption
+  | vgetr ev h_bounds ih =>
+    rename_i r e i vs v
+    obtain ⟨iptr, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (is := [.read (Int.ofNat i)] ++ is) rel
+    cases cont
+    cases repr with
+    | vec ivs hrep_vs hlook_vs =>
+      refine ⟨ivs i, h', is, cs, (ivs i) :: s, ?_, ?_, ?_, ?_⟩
+      · rw [show compile ds c (.vget e i) = compile ds c e ++ [.read (Int.ofNat i)] by rfl]
+        rw [List.append_assoc]
+        apply Steps.trans_steps steps
+        apply Steps.trans Steps.refl
+        apply Step.readr
+        apply hlook_vs i v h_bounds
+      · apply ContinuesWith.val
+      · apply hrep_vs i v h_bounds
+      · assumption
+  | vsetr => sorry
+  | vset_proplr ev ih =>
+    rename_i r e i e_v v
+    obtain ⟨iptr, h', is', cs', s', steps, cont, repr, extn⟩ :=
+      ih (cs := cs) (is := compile ds (none :: c) e_v ++ Instr.exch :: Instr.write (Int.ofNat i) :: is) rel
+    exists iptr, h', is', cs', s'
+    constructor
+    · simp [compile, List.append_assoc]
+      assumption
+    constructor
+    · apply exn_lemma
+      assumption
+    constructor
+    assumption
+    assumption
+  | vset_proprr ev1 ev2 ih1 ih2 =>
+    rename_i r e i e_v vs v
+    obtain ⟨iptr, h1, is1, cs1, s1, steps1, cont1, repr1, ext1⟩ :=
+      ih1 (is := compile ds (none :: c) e_v ++ Instr.exch :: Instr.write (Int.ofNat i) :: is) rel
+    cases cont1
+    have rel_stable : Related s c r h1 := Related.mono rel ext1
+    have rel_e_v : Related (iptr :: s) (none :: c) r h1 := Related.push rel_stable
+
+    obtain ⟨iv, h2, is2, cs2, s2, steps2, cont2, repr2, ext2⟩ :=
+      ih2 (is := Instr.exch :: Instr.write (Int.ofNat i) :: is) rel_e_v
+    cases cont2 with | exn h_exn =>
+
+    exists iv, h2, is2, cs2, s2
+    constructor
+    · simp [compile, List.append_assoc]
+      apply Steps.trans_steps steps1
+      exact steps2
+    constructor
+    · apply exn_lemma
+      apply ContinuesWith.exn
+      assumption
+    constructor
+    · assumption
+    · intro aa vv hlook
+      apply ext2
+      apply ext1
+      assumption
