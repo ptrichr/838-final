@@ -35,7 +35,6 @@ inductive Val where
 inductive Ans where
   | val (v : Val) : Ans
   | exn (v : Val) : Ans
-  | vals (vs : List Val) : Ans
 
 abbrev Env := List (Var × Val)
 
@@ -435,7 +434,6 @@ inductive Related : Stack -> CEnv -> Env -> Heap -> Prop where
 def AnsRep : Ans → Int → Heap → Prop
   | .val v, i, h => Represents v i h
   | .exn v, i, h => Represents v i h
-  | .vals vs, i, h => Represents (.vec vs) i h
 
 -- * values return normally;
 -- * exceptions skip .ret frames;
