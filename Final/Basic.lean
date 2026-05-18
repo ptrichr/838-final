@@ -400,7 +400,6 @@ def build_vec (i : Nat) (es' : List Expr) (ds : Defns) (c : CEnv) : List Instr :
     -- writes value in stackto i offset from pointer
     [.exch, .write (Int.ofNat i)] ++
     build_vec (i + 1) rest ds c
-
 end
 
 def compile_defn (ds : Defns) (d : Defn) :=
@@ -566,7 +565,8 @@ theorem abort_exists_steps
           · apply Steps.trans Steps.refl
             apply Step.abort_handler
           · apply ExnContinuesWith.exn_handler
-def maxAbsIntList (xs : List Int) : Nat :=
+
+def max_abs_int_list (xs : List Int) : Nat :=
   xs.foldl (fun m x => Nat.max m (Int.natAbs x)) 0
 
 def dom (h : Heap) : List Int := h.map Prod.fst
@@ -583,7 +583,7 @@ theorem le_foldl_maxAbs (acc : Nat) (xs : List Int) :
         (ih (Nat.max acc (Int.natAbs x)))
 
 theorem natAbs_le_maxAbsIntList_of_mem {a : Int} {xs : List Int} :
-  a ∈ xs -> Int.natAbs a ≤ maxAbsIntList xs := by
+  a ∈ xs -> Int.natAbs a ≤ max_abs_int_list xs := by
   intro hmem
   have aux :
     ∀ (ys : List Int) (acc : Nat),
@@ -604,7 +604,7 @@ theorem natAbs_le_maxAbsIntList_of_mem {a : Int} {xs : List Int} :
             (Nat.le_max_right acc (Int.natAbs a))
             (le_foldl_maxAbs (acc := Nat.max acc (Int.natAbs a)) (xs := xs))
         · exact ih (Nat.max acc (Int.natAbs x)) htail
-  simpa [maxAbsIntList] using aux xs 0 hmem
+  simpa [max_abs_int_list] using aux xs 0 hmem
 
 theorem lookup_some_mem_dom {h : Heap} {a v : Int} :
   Heap.lookup h a = some v -> a ∈ dom h := by
@@ -624,15 +624,15 @@ theorem lookup_some_mem_dom {h : Heap} {a v : Int} :
 
 theorem exists_freshBlock (h : Heap) (n : Nat) :
   ∃ a : Int, FreshBlock h a n := by
-  let M : Nat := maxAbsIntList (dom h)
+  let M : Nat := max_abs_int_list (dom h)
   refine ⟨Int.ofNat (M + 1), ?_⟩
   intro k hk
-  cases hL : Heap.lookup h (Int.ofNat (M + 1) + Int.ofNat k) with
+  cases h_l : Heap.lookup h (Int.ofNat (M + 1) + Int.ofNat k) with
   | none =>
       rfl
   | some v =>
       have hmem : (Int.ofNat (M + 1) + Int.ofNat k) ∈ dom h :=
-        lookup_some_mem_dom (by simpa [hL])
+        lookup_some_mem_dom (by simpa [h_l])
       have hbound : Int.natAbs (Int.ofNat (M + 1) + Int.ofNat k) ≤ M := by
         simpa [M] using natAbs_le_maxAbsIntList_of_mem hmem
       have hadd : Int.ofNat (M + 1) + Int.ofNat k = Int.ofNat (M + 1 + k) := by
@@ -657,11 +657,11 @@ theorem HeapExtends.write {h a v} :
   Heap.lookup h a = none ->
   HeapExtends h (Heap.ext h a v) := by
   intro hl a' v' hl'
-  by_cases hEq : a' = a
-  · subst hEq
+  by_cases h_eq : a' = a
+  · subst h_eq
     rw [hl] at hl'
     contradiction
-  · simp [Heap.lookup, Heap.ext, hEq]
+  · simp [Heap.lookup, Heap.ext, h_eq]
     assumption
 
 theorem ext_lookup_of_ne {h : Heap} {a b i : Int} (hba : b ≠ a) :
