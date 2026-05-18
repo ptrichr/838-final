@@ -491,7 +491,6 @@ theorem Represents.mono {v i h h'} :
     · intro k v hk
       exact ih k v hk hext
     · intro k v hk
-
       exact hext _ _ (hlook_vs k v hk)
 
 -- lemma about state stability across env/stack and heap
@@ -512,7 +511,7 @@ theorem Related.mono {s c r h h'} :
 -- flow is yielded to the exception
 theorem exn_lemma
   {v is1 is2 cs s i is' cs' s'} :
-  ContinuesWith (.exn v) is1 cs s i is' cs' s' →
+  ContinuesWith (.exn v) is1 cs s i is' cs' s' ->
   ContinuesWith (.exn v) is2 cs s i is' cs' s' := by
   intro h
   cases h with
@@ -528,9 +527,9 @@ theorem exn_lemma
       apply ExnContinuesWith.exn_handler
 
 -- transitivitiy between sequences of steps
-theorem Steps.trans_steps {ds is1 cs1 s1 h1 is2 cs2 s2 h2 is3 cs3 s3 h3} :
-  Steps ds is1 cs1 s1 h1 is2 cs2 s2 h2 →
-  Steps ds is2 cs2 s2 h2 is3 cs3 s3 h3 →
+theorem trans_steps {ds is1 cs1 s1 h1 is2 cs2 s2 h2 is3 cs3 s3 h3} :
+  Steps ds is1 cs1 s1 h1 is2 cs2 s2 h2 ->
+  Steps ds is2 cs2 s2 h2 is3 cs3 s3 h3 ->
   Steps ds is1 cs1 s1 h1 is3 cs3 s3 h3 := by
   intro h12 h23
   induction h23 with
@@ -554,7 +553,7 @@ theorem abort_exists_steps
           obtain ⟨is', cs', s', steps_tail, exn_tail⟩ :=
             ih (is := is) (i := i) (s := s)
           refine ⟨is', cs', s', ?_, ?_⟩
-          · apply Steps.trans_steps
+          · apply trans_steps
             · apply Steps.trans Steps.refl
               apply Step.abort_retr
             · assumption
@@ -565,6 +564,7 @@ theorem abort_exists_steps
           · apply Steps.trans Steps.refl
             apply Step.abort_handler
           · apply ExnContinuesWith.exn_handler
+
 
 def max_abs_int_list (xs : List Int) : Nat :=
   xs.foldl (fun m x => Nat.max m (Int.natAbs x)) 0
@@ -877,8 +877,8 @@ theorem compiler_correct_general
     exists (xl + xr), hr', is, cs, (xl + xr) :: s
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps stepsl
-      apply Steps.trans_steps stepsr
+      apply trans_steps stepsl
+      apply trans_steps stepsr
       apply Steps.trans Steps.refl
       apply Step.opr OpEval.plus
     constructor
@@ -907,8 +907,8 @@ theorem compiler_correct_general
     exists (xl * xr), hr', is, cs, (xl * xr) :: s
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps stepsl
-      apply Steps.trans_steps stepsr
+      apply trans_steps stepsl
+      apply trans_steps stepsr
       apply Steps.trans Steps.refl
       apply Step.opr OpEval.mult
     constructor
@@ -952,7 +952,7 @@ theorem compiler_correct_general
     exists xr, hr', isr', csr', sr'
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps stepsl
+      apply trans_steps stepsl
       exact stepsr
 
     constructor
@@ -995,7 +995,7 @@ theorem compiler_correct_general
     exists xr, hr', isr', csr', sr'
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps stepsl
+      apply trans_steps stepsl
       exact stepsr
 
     constructor
@@ -1021,8 +1021,8 @@ theorem compiler_correct_general
       exists xt, ht', is, cs, (xt :: s)
       constructor
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps stepsg
-        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchtr)
+        apply trans_steps stepsg
+        apply trans_steps (Steps.trans Steps.refl Step.branchtr)
         assumption
       constructor
       · apply ContinuesWith.val
@@ -1036,8 +1036,8 @@ theorem compiler_correct_general
       exists xt, ht', ist', cst', st'
       constructor
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps stepsg
-        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchtr)
+        apply trans_steps stepsg
+        apply trans_steps (Steps.trans Steps.refl Step.branchtr)
         assumption
       constructor
       · apply ContinuesWith.exn
@@ -1062,8 +1062,8 @@ theorem compiler_correct_general
     | val =>
       refine ⟨xf, hf', is, cs, xf :: s, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps stepsg
-        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
+        apply trans_steps stepsg
+        apply trans_steps (Steps.trans Steps.refl Step.branchfr)
         assumption
       · apply ContinuesWith.val
       · assumption
@@ -1074,8 +1074,8 @@ theorem compiler_correct_general
     | exn h_exn =>
       refine ⟨xf, hf', isf', csf', sf', ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps stepsg
-        apply Steps.trans_steps (Steps.trans Steps.refl Step.branchfr)
+        apply trans_steps stepsg
+        apply trans_steps (Steps.trans Steps.refl Step.branchfr)
         assumption
       · apply ContinuesWith.exn
         assumption
@@ -1103,7 +1103,7 @@ theorem compiler_correct_general
     exists 0, h', is, cs, (0 :: s)
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps steps
+      apply trans_steps steps
       apply Steps.trans Steps.refl
       apply Step.opr OpEval.flip1
     constructor
@@ -1119,7 +1119,7 @@ theorem compiler_correct_general
     exists 1, h', is, cs, (1 :: s)
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps steps
+      apply trans_steps steps
       apply Steps.trans Steps.refl
       apply Step.opr OpEval.flip0
     constructor
@@ -1157,8 +1157,8 @@ theorem compiler_correct_general
     | val =>
       refine ⟨i2, h2, is, cs, i2 :: s, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps steps1
-        apply Steps.trans_steps steps2
+        apply trans_steps steps1
+        apply trans_steps steps2
         apply Steps.trans
         · apply Steps.trans Steps.refl
           apply Step.exchr
@@ -1173,7 +1173,7 @@ theorem compiler_correct_general
       refine ⟨i2, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
         repeat rw [List.append_assoc]
-        apply Steps.trans_steps steps1
+        apply trans_steps steps1
         assumption
       · apply exn_lemma
         apply ContinuesWith.exn
@@ -1276,7 +1276,7 @@ theorem compiler_correct_general
     | exn h_exn =>
       refine ⟨i2, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps steps1
+        apply trans_steps steps1
         assumption
       · apply exn_lemma
         apply ContinuesWith.exn
@@ -1352,15 +1352,15 @@ theorem compiler_correct_general
     | val =>
       refine ⟨ibody, h2, is, cs, ibody :: s, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps steps1
+        apply trans_steps steps1
         rw [hnidx]
-        apply Steps.trans_steps
+        apply trans_steps
         · apply Steps.trans
           · apply Steps.trans Steps.refl
             apply Step.pushr
           · apply Step.callr
             simpa using hncode
-        apply Steps.trans_steps steps2
+        apply trans_steps steps2
         apply Steps.trans
         · apply Steps.trans Steps.refl
           apply Step.exchr
@@ -1374,9 +1374,9 @@ theorem compiler_correct_general
     | exn h_exn =>
       refine ⟨ibody, h2, is2, cs2, s2, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps steps1
+        apply trans_steps steps1
         rw [hnidx]
-        apply Steps.trans_steps
+        apply trans_steps
         · apply Steps.trans
           · apply Steps.trans Steps.refl
             apply Step.pushr
@@ -1399,14 +1399,10 @@ theorem compiler_correct_general
     obtain ⟨is', cs', s', abortsteps, exncont⟩ :=
       abort_exists_steps
         (ds := compile_defns ds)
-        (is := is)
-        (cs := cs)
-        (i := i)
-        (s := s)
         (h := h')
     refine ⟨i, h', is', cs', s', ?_, ?_, ?_, ?_⟩
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps steps
+      apply trans_steps steps
       assumption
     · apply ContinuesWith.exn
       assumption
@@ -1442,11 +1438,11 @@ theorem compiler_correct_general
         (i :: s) h' := by
       simpa using stepsb
     refine ⟨i, h', is, cs, i :: s, ?_, ?_, ?_, ?_⟩
-    · simp [compile, List.append_assoc]
-      apply Steps.trans_steps
+    · simp [compile]
+      apply trans_steps
       · apply Steps.trans Steps.refl
         apply Step.trycatchr
-      apply Steps.trans_steps stepsb'
+      apply trans_steps stepsb'
       apply Steps.trans Steps.refl
       apply Step.ret_handler
     · apply ContinuesWith.val
@@ -1492,20 +1488,20 @@ theorem compiler_correct_general
       cases conth with
       | val =>
         refine ⟨ires, h2, is, cs, ires :: s, ?_, ?_, ?_, ?_⟩
-        · simp [compile, List.append_assoc]
-          apply Steps.trans_steps
+        · simp [compile]
+          apply trans_steps
           · apply Steps.trans Steps.refl
             apply Step.trycatchr
-          apply Steps.trans_steps stepsb'
+          apply trans_steps stepsb'
           rw [hnidx]
-          apply Steps.trans_steps
+          apply trans_steps
           · apply Steps.trans
             · apply Steps.trans Steps.refl
               apply Step.pushr
             · apply Step.callr
               simpa using hncode
-          apply Steps.trans_steps stepsh
-          apply Steps.trans_steps
+          apply trans_steps stepsh
+          apply trans_steps
           · apply Steps.trans
             · apply Steps.trans Steps.refl
               apply Step.exchr
@@ -1522,13 +1518,13 @@ theorem compiler_correct_general
         cases h_handler_exn with
         | exn_ret h_tail =>
           refine ⟨ires, h2, ish, csh, sh, ?_, ?_, ?_, ?_⟩
-          · simp [compile, List.append_assoc]
-            apply Steps.trans_steps
+          · simp [compile]
+            apply trans_steps
             · apply Steps.trans Steps.refl
               apply Step.trycatchr
-            apply Steps.trans_steps stepsb'
+            apply trans_steps stepsb'
             rw [hnidx]
-            apply Steps.trans_steps
+            apply trans_steps
             · apply Steps.trans
               · apply Steps.trans Steps.refl
                 apply Step.pushr
@@ -1569,8 +1565,8 @@ theorem compiler_correct_general
       apply HeapExtends.trans ext1 h1_h3
     refine ⟨a, h3, is, cs, a :: s, ?_, ?_, ?_, ?_⟩
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps steps1
-      apply Steps.trans_steps steps2
+      apply trans_steps steps1
+      apply trans_steps steps2
       apply Steps.trans
       · apply Steps.trans
         · apply Steps.trans Steps.refl
@@ -1618,7 +1614,7 @@ theorem compiler_correct_general
     exists exn, h', is', cs', s'
     constructor
     · simp [compile, build_vec, List.append_assoc]
-      apply Steps.trans_steps
+      apply trans_steps
       -- get allocation steps by itself
       · apply Steps.trans Steps.refl (Step.allocr fresh)
       · assumption
@@ -1650,7 +1646,7 @@ theorem compiler_correct_general
     | vec ivs hrep_vs hlook_vs =>
       refine ⟨ivs i, h', is, cs, (ivs i) :: s, ?_, ?_, ?_, ?_⟩
       · simp [compile, List.append_assoc]
-        apply Steps.trans_steps steps
+        apply trans_steps steps
         apply Steps.trans Steps.refl
         apply Step.readr
         apply hlook_vs i v h_bounds
@@ -1687,7 +1683,7 @@ theorem compiler_correct_general
     exists iv, h2, is2, cs2, s2
     constructor
     · simp [compile, List.append_assoc]
-      apply Steps.trans_steps steps1
+      apply trans_steps steps1
       exact steps2
     constructor
     · apply exn_lemma
